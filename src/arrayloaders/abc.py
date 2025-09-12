@@ -23,12 +23,12 @@ if TYPE_CHECKING:
     import numpy as np
 
 
-class AbstractIterableDataset(Generic[OnDiskArray, InputInMemoryArray, OutputInMemoryArray], metaclass=ABCMeta):  # noqa: D101
+class AbstractIterableDataset(Generic[OnDiskArray, InputInMemoryArray], metaclass=ABCMeta):  # noqa: D101
     _shuffle: bool
     _preload_nchunks: int
     _worker_handle: WorkerHandle
     _chunk_size: int
-    _dataset_manager: AnnDataManager[OnDiskArray, InputInMemoryArray, OutputInMemoryArray]
+    _dataset_manager: AnnDataManager[OnDiskArray, InputInMemoryArray]
 
     def __init__(
         self,
@@ -39,6 +39,8 @@ class AbstractIterableDataset(Generic[OnDiskArray, InputInMemoryArray, OutputInM
         return_index: bool = False,
         batch_size: int = 1,
         preload_to_gpu: bool = True,
+        drop_last: bool = False,
+        to_torch: bool = True,
     ):
         """A loader for on-disk {array_type} data.
 
@@ -65,10 +67,17 @@ class AbstractIterableDataset(Generic[OnDiskArray, InputInMemoryArray, OutputInM
             batch_size
                 Batch size to yield from the dataset.
             preload_to_gpu
-                Whether or not to use cupy for non-io array operations like vstack and indexing.
-                This option entails greater GPU memory usage.
+                Whether or not to use cupy for non-io array operations like vstack and indexing once the data is in memory internally.
+                This option entails greater GPU memory usage, but is faster at least for sparse operations.
+                :func:`torch.vstack` does not support CSR sparse matrices, hence the current use of cupy.
                 Setting this to `False` is advisable when using the :class:`torch.utils.data.DataLoader` wrapper or potentially with dense data.
-
+            drop_last
+                Set to True to drop the last incomplete batch, if the dataset size is not divisible by the batch size.
+                If False and the size of dataset is not divisible by the batch size, then the last batch will be smaller.
+                Leave as False when using in conjunction with a :class:`torch.utils.data.DataLoader`.
+            to_torch
+                Whether to return `torch.Tensor` as the output.
+                Data transferred should be 0-copy independent of source, and transfer to cuda when applicable is non-blocking.
 
         Examples
         --------
@@ -98,6 +107,8 @@ class AbstractIterableDataset(Generic[OnDiskArray, InputInMemoryArray, OutputInM
             return_index=return_index,
             batch_size=batch_size,
             preload_to_gpu=preload_to_gpu,
+            drop_last=drop_last,
+            to_torch=to_torch,
         )
         self._chunk_size = chunk_size
         self._preload_nchunks = preload_nchunks
@@ -162,7 +173,10 @@ class AbstractIterableDataset(Generic[OnDiskArray, InputInMemoryArray, OutputInM
     ) -> Iterator[
         tuple[OutputInMemoryArray, None | np.ndarray] | tuple[OutputInMemoryArray, None | np.ndarray, np.ndarray]
     ]:
-        """Iterate over the on-disk datasets, returning :class:`{gpu_array}` or :class:`{cpu_array}` depending on whether or not `preload_to_gpu` is set.
+        """
+        Iterate over the on-disk datasets, returning :class:`{gpu_array}` or :class:`{cpu_array}` depending on whether or not `preload_to_gpu` is set.
+
+        Will convert to a :class:`torch.Tensor` if `to_torch` is True.
 
         Yields
         ------
